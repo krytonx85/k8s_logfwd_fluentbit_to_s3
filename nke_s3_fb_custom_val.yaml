@@ -1,0 +1,97 @@
+# The envWithTpl array below has the same usage as "env", but is using the tpl function to support templatable string.
+# This can be useful when you want to pass dynamic values to the Chart using the helm argument "--set <variable>=<value>"
+# https://helm.sh/docs/howto/charts_tips_and_tricks/#using-the-tpl-function
+envWithTpl:
+- name: AWS_ACCESS_KEY_ID
+  value: "{{ .Values.access_key_id }}"
+- name: AWS_SECRET_ACCESS_KEY
+  value: "{{ .Values.secret_access_key }}"
+
+config:
+  service: |
+    [SERVICE]
+        Daemon Off
+        Flush {{ .Values.flush }}
+        Log_Level {{ .Values.logLevel }}
+        Parsers_File parsers.conf
+        Parsers_File custom_parsers.conf
+        HTTP_Server On
+        HTTP_Listen 0.0.0.0
+        HTTP_Port {{ .Values.metricsPort }}
+        Health_Check On
+
+  ## https://docs.fluentbit.io/manual/pipeline/inputs
+  inputs: |
+    [INPUT]
+        Name tail
+        Path /var/log/containers/*.log
+        multiline.parser docker, cri, go, python, java
+        Tag kube.*
+        Mem_Buf_Limit 5MB
+        Skip_Long_Lines On
+
+    [INPUT]
+        Name systemd
+        Path /run/log/journal
+        Tag host.*
+        Read_From_Tail On
+
+  ## https://docs.fluentbit.io/manual/pipeline/filters
+  filters: |
+    [FILTER]
+        Name kubernetes
+        Match kube.*
+        Merge_Log On
+        Keep_Log Off
+        K8S-Logging.Parser On
+        K8S-Logging.Exclude On
+
+  ## https://docs.fluentbit.io/manual/pipeline/outputs
+  outputs: |
+    [OUTPUT]
+        Name s3
+        Match kube.*
+        bucket {{ .Values.bucket_name }}
+        endpoint  {{ .Values.endpoint }}
+        tls.verify Off
+        s3_key_format /fluent-bit-logs/pods/$TAG[5]/$TAG[4]/%Y/%m/%d/
+        s3_key_format_tag_delimiters ._
+        upload_timeout 5s
+    [OUTPUT]
+        Name s3
+        Match host.*
+        bucket {{ .Values.bucket_name }}
+        endpoint  {{ .Values.endpoint }}
+        tls.verify Off
+        s3_key_format /fluent-bit-logs/host_systemd/$TAG/%Y/%m/%d/
+        s3_key_format_tag_delimiters ._
+        upload_timeout 5s
+
+daemonSetVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+  - name: varlibdockercontainers
+    hostPath:
+      path: /var/lib/docker/containers
+  - name: etcmachineid
+    hostPath:
+      path: /etc/machine-id
+      type: File
+  - name: runlog
+    hostPath:
+      path: /run/log
+    
+
+daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+  - name: varlibdockercontainers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
+  - name: etcmachineid
+    mountPath: /etc/machine-id
+    readOnly: true
+  - name: runlog
+    mountPath: /run/log
+
